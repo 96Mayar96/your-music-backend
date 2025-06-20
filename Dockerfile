@@ -1,19 +1,29 @@
-# Use an official Node.js runtime as a parent image
-FROM node:18-alpine
+# Use an official Node.js runtime as the base image
+FROM node:20-slim
 
-# Set the working directory in the container
+# Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json to the working directory
-# and install dependencies
-COPY package*.json ./
-RUN npm install --production
+# Install Python and pip (yt-dlp prerequisite)
+RUN apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/*
 
-# Copy the rest of the application code to the working directory
+# Install yt-dlp using pip
+RUN pip install yt-dlp
+
+# Install ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
+# Copy package.json and package-lock.json to the working directory
+COPY package*.json ./
+
+# Install Node.js dependencies
+RUN npm install
+
+# Copy the rest of your application code
 COPY . .
 
-# Expose the port the app runs on
-EXPOSE 4000
+# Expose the port your app runs on
+EXPOSE 3000
 
-# Define the command to run the app
+# Command to run the application
 CMD ["npm", "start"]
