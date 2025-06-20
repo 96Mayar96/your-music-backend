@@ -14,11 +14,11 @@ RUN apt-get update && \
         libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and setuptools before installing yt-dlp
-RUN pip install --upgrade pip setuptools
+# Upgrade pip and setuptools before installing yt-dlp, using --break-system-packages
+RUN pip install --upgrade pip setuptools --break-system-packages
 
 # Install yt-dlp using pip, overriding the externally-managed-environment error
-RUN pip install --break-system-packages yt-dlp
+RUN pip install yt-dlp --break-system-packages
 
 # Install ffmpeg
 RUN apt-get update && \
