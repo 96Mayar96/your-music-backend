@@ -11,23 +11,22 @@ RUN apt-get update && \
         python3 \
         python3-pip \
         build-essential \
-        # Required for many Python packages, including some native extensions yt-dlp might use
         libffi-dev \
         libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Upgrade pip and setuptools before installing yt-dlp
+RUN pip install --upgrade pip setuptools
+
 # Install yt-dlp using pip
-# yt-dlp is a popular fork of youtube-dl and is actively maintained.
 RUN pip install yt-dlp
 
 # Install ffmpeg
-# ffmpeg is required for audio conversion (e.g., to MP3)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy package.json and package-lock.json to the working directory
-# This is done separately to leverage Docker's layer caching for faster builds
 COPY package*.json ./
 
 # Install Node.js dependencies
