@@ -5,7 +5,6 @@ FROM node:20-slim
 WORKDIR /app
 
 # Install Python, pip, and essential build tools for Python packages
-# This helps resolve common 'pip install' errors
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 \
@@ -18,8 +17,8 @@ RUN apt-get update && \
 # Upgrade pip and setuptools before installing yt-dlp
 RUN pip install --upgrade pip setuptools
 
-# Install yt-dlp using pip
-RUN pip install yt-dlp
+# Install yt-dlp using pip, overriding the externally-managed-environment error
+RUN pip install --break-system-packages yt-dlp
 
 # Install ffmpeg
 RUN apt-get update && \
