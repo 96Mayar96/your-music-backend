@@ -25,12 +25,8 @@ app.get('/search', async (req, res) => {
 
     console.log(`Received search request for: "${query}" (SoundCloud search via yt-dlp)`);
 
-    // Use yt-dlp to search SoundCloud and dump JSON metadata for each result
-    // --dump-json outputs JSON for each entry
-    // --flat-playlist to get direct entries, not playlists (useful for search)
-    // --default-search "scsearch" ensures it searches SoundCloud
-    // --max-downloads 1000 to limit results as requested by user
-    const command = `yt-dlp --dump-json --flat-playlist --default-search "scsearch" --max-downloads 1000 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "${query}"`;
+    // Added --no-check-certificate, --prefer-https, and increased network timeout
+    const command = `yt-dlp --dump-json --flat-playlist --default-search "scsearch" --max-downloads 1000 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${query}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => { // Increased buffer significantly for 1000 results
         if (error) {
@@ -43,6 +39,8 @@ app.get('/search', async (req, res) => {
                 errorMessage = 'Search blocked by SoundCloud (bot detection/login required).';
             } else if (stderr.includes('ERROR: Unable to extract')) {
                 errorMessage = 'Could not process search results from SoundCloud. It might be a temporary issue.';
+            } else if (stderr.includes('timed out')) {
+                errorMessage = 'SoundCloud search timed out. The server might be too slow or network issues.';
             }
             return res.status(500).json({ success: false, message: errorMessage, stderr: stderr });
         }
@@ -51,8 +49,6 @@ app.get('/search', async (req, res) => {
         }
 
         try {
-            // yt-dlp --dump-json with a search query can output multiple JSON objects
-            // separated by newlines. We need to parse each one.
             const rawResults = stdout.trim().split('\n');
             const formattedResults = [];
 
@@ -60,28 +56,22 @@ app.get('/search', async (req, res) => {
                 if (line.trim()) { // Ensure line is not empty
                     try {
                         const metadata = JSON.parse(line);
-                        // Filter out non-SoundCloud results if yt-dlp finds them elsewhere,
-                        // although with --default-search "scsearch", it should mostly be SoundCloud.
-                        if (metadata.extractor_key && metadata.extractor_key.includes('SoundCloud')) {
+                        if (metadata.extractor_key && metadata.extractor_key.includes('Soundcloud')) {
                             formattedResults.push({
                                 title: metadata.title,
                                 artist: metadata.uploader || metadata.channel || 'Unknown',
-                                // SoundCloud URLs are the primary unique identifier here
                                 url: metadata.webpage_url,
-                                thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null // Get the highest quality thumbnail
+                                thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
                             });
                         }
                     } catch (parseLineError) {
                         console.warn(`Failed to parse a line of search result JSON: ${parseLineError} - Line: ${line}`);
-                        // Skip malformed lines
                     }
                 }
             }
 
             console.log(`Successfully found ${formattedResults.length} SoundCloud results for: ${query}`);
             if (formattedResults.length === 0 && rawResults.length > 0) {
-                 // This case means yt-dlp found something but it wasn't a SoundCloud entry or was unparsable.
-                 // We provide a more generic error for the user here.
                  return res.status(200).json({ success: false, message: 'No relevant SoundCloud songs found. Try a more specific query.', results: [] });
             }
             res.json({ success: true, results: formattedResults });
@@ -94,28 +84,24 @@ app.get('/search', async (req, res) => {
 });
 
 
-// Download and convert to MP3 endpoint (uses yt-dlp for actual download)
-// This endpoint remains largely the same, as it already takes a URL for download.
+// Download and convert to MP3 endpoint
 app.post('/download-mp3', async (req, res) => {
     console.log('Backend: Received POST /download-mp3 request. Raw body:', req.body);
-    const { url } = req.body; // URL should now come from frontend based on search results
+    const { url } = req.body;
     console.log('Backend: Extracted URL from body:', url);
 
     if (!url) {
         return res.status(400).json({ success: false, message: 'Source URL is required for download.' });
     }
 
-    // Attempt to create a unique file name based on URL hash
     const hash = crypto.createHash('md5').update(url).digest('hex');
     const outputFileName = `${hash}.mp3`;
     const outputFilePath = path.join(audioDir, outputFileName);
     const publicAudioUrl = `https://${req.hostname}/audio/${outputFileName}`;
 
-    // Check if the MP3 already exists using the hashed name
     if (fs.existsSync(outputFilePath)) {
         console.log(`MP3 for URL hash ${hash} already exists. Serving existing file.`);
-        // Re-extract metadata to send back, if possible, for consistent display
-        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "${url}"`;
+        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${url}"`;
         exec(metadataCommand, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
             if (metaError) {
                 console.warn(`Error getting metadata for existing file ${url}: ${metaError.message}`);
@@ -123,9 +109,9 @@ app.post('/download-mp3', async (req, res) => {
                     success: true,
                     message: 'Audio already processed and available.',
                     audioUrl: publicAudioUrl,
-                    title: `Previously Downloaded Track (ID: ${hash.substring(0, 8)})`, // Fallback
-                    artist: 'Unknown', // Fallback
-                    thumbnail: null // Fallback
+                    title: `Previously Downloaded Track (ID: ${hash.substring(0, 8)})`,
+                    artist: 'Unknown',
+                    thumbnail: null
                 });
             }
             try {
@@ -140,7 +126,7 @@ app.post('/download-mp3', async (req, res) => {
                 });
             } catch (parseMetaError) {
                 console.error(`Failed to parse metadata JSON for existing file: ${parseMetaError}`);
-                res.json({ // Still send success, but with fallback info
+                res.json({
                     success: true,
                     message: 'Audio already processed, but metadata refresh failed.',
                     audioUrl: publicAudioUrl,
@@ -154,8 +140,8 @@ app.post('/download-mp3', async (req, res) => {
     }
 
     console.log(`Starting download for ${url}`);
-    // yt-dlp for actual download and conversion
-    const command = `yt-dlp -x --audio-format mp3 -o "${outputFilePath}" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "${url}"`;
+    // Added --no-check-certificate, --prefer-https, and --socket-timeout
+    const command = `yt-dlp -x --audio-format mp3 -o "${outputFilePath}" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${url}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 10 }, async (error, stdout, stderr) => {
         if (error) {
@@ -169,6 +155,8 @@ app.post('/download-mp3', async (req, res) => {
                 errorMessage = 'Track not found, unavailable, or is private.';
             } else if (stderr.includes('Unsupported URL')) {
                 errorMessage = 'Unsupported URL for download. Please ensure it is a valid video/audio page.';
+            } else if (stderr.includes('timed out')) {
+                errorMessage = 'Download timed out. The server might be too slow or network issues.';
             }
             return res.status(500).json({ success: false, message: errorMessage, stderr: stderr });
         }
@@ -179,19 +167,17 @@ app.post('/download-mp3', async (req, res) => {
         console.log(`Download/Conversion successful for ${url}`);
 
         // After successful download, extract metadata using yt-dlp --print-json to send back
-        // This second call ensures we get metadata for the *downloaded* track.
-        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "${url}"`;
+        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${url}"`;
         exec(metadataCommand, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
             if (metaError) {
                 console.error(`exec error for metadata after download: ${metaError}`);
-                // Continue despite metadata error, as download was successful
                 return res.json({
                     success: true,
                     message: 'Audio downloaded and converted successfully, but metadata extraction failed.',
                     audioUrl: publicAudioUrl,
-                    title: 'Downloaded Track (Metadata N/A)', // Fallback
-                    artist: 'Unknown', // Fallback
-                    thumbnail: null // Fallback
+                    title: 'Downloaded Track (Metadata N/A)',
+                    artist: 'Unknown',
+                    thumbnail: null
                 });
             }
             try {
