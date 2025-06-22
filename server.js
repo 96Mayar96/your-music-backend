@@ -25,16 +25,20 @@ app.get('/search', async (req, res) => {
 
     console.log(`Received search request for: "${query}"`);
 
-    const command = `yt-dlp --dump-json "ytsearch:${query}"`;
+    // Added --user-agent to make the request appear more like a browser
+    const command = `yt-dlp --dump-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "ytsearch:${query}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
         if (error) {
             console.error(`exec error: ${error}`);
+            console.error(`stdout: ${stdout}`); // Log stdout for more context
+            console.error(`stderr: ${stderr}`); // Log stderr for the bot detection message
             // Attempt to parse stderr for more specific error message if it's JSON
             try {
                 const errorJson = JSON.parse(stderr);
                 return res.status(500).json({ success: false, message: errorJson.message || 'Failed to search YouTube.', details: stderr });
             } catch (parseError) {
+                // Return the raw stderr if it's not JSON, which contains the bot message
                 return res.status(500).json({ success: false, message: `Failed to search YouTube: ${error.message}`, details: stderr });
             }
         }
@@ -115,7 +119,8 @@ app.post('/download-mp3', async (req, res) => {
     // -x: extract audio
     // --audio-format mp3: specify mp3 format
     // -o: output filename template
-    const command = `yt-dlp -x --audio-format mp3 -o "${outputFilePath}" "${url}"`;
+    // Added --user-agent here as well, for consistency and bot detection
+    const command = `yt-dlp -x --audio-format mp3 -o "${outputFilePath}" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "${url}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 10 }, async (error, stdout, stderr) => { // Increased maxBuffer
         if (error) {
@@ -131,7 +136,8 @@ app.post('/download-mp3', async (req, res) => {
         console.log(`Download/Conversion successful for ${url}`);
 
         // After successful download, extract metadata using yt-dlp to send back
-        const metadataCommand = `yt-dlp --print-json "${url}"`;
+        // Added --user-agent here too
+        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "${url}"`;
         exec(metadataCommand, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
             if (metaError) {
                 console.error(`exec error for metadata: ${metaError}`);
