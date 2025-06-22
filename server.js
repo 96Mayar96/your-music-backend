@@ -54,59 +54,50 @@ app.get('/search', async (req, res) => {
     }
 
     console.log(`Received search request for: "${searchQuery}"`);
-    try {
-        const searchResultsRaw = await youtubeDl(searchQuery, {
-            dumpSingleJson: true,
-            flatPlaylist: true, // Treat results as a flat list
-            defaultSearch: 'ytsearch', // Search YouTube directly
-            noWarnings: true,
-            callHome: false,
-            noCheckCertificates: true,
-            exec: {
-                ytDlpPath: YTDLP_BIN_PATH
-            }
-        });
-
-        console.log('Raw yt-dlp search results (entries count):', searchResultsRaw.entries ? searchResultsRaw.entries.length : 0);
-        // console.log('Raw yt-dlp search results sample:', searchResultsRaw.entries ? JSON.stringify(searchResultsRaw.entries.slice(0, 2), null, 2) : 'No entries'); // Log first 2 entries for debugging
-
-        const formattedResults = (searchResultsRaw.entries || []) // Ensure entries is an array
-            .filter(entry => {
-                // Filter for valid video URLs, handling potential undefined webpage_url
-                const isValidUrl = entry.webpage_url && (entry.webpage_url.includes('youtube.com/watch') || entry.webpage_url.includes('youtu.be/'));
-                if (!isValidUrl) {
-                    // console.log('Filtered out non-video entry:', entry.webpage_url || entry.title); // Log what's filtered out
-                }
-                return isValidUrl;
-            })
-            .map(entry => ({
-                title: entry.title,
-                // Use uploader or channel as artist, fallback to 'Unknown'
-                artist: entry.uploader || entry.channel || 'Unknown',
-                url: entry.webpage_url, // Full YouTube URL
-                youtubeId: entry.id, // YouTube Video ID
-                // Use available thumbnail, or construct a reliable default
-                thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`
-            }))
-            .slice(0, 15); // Increased limit to 15 to get more options
-
-        console.log(`Found ${formattedResults.length} formatted results.`);
-
-        if (formattedResults.length > 0) {
-            res.json({
-                success: true,
-                results: formattedResults
-            });
-        } else {
-            res.status(200).json({ success: false, message: 'No relevant video results found.', results: [] }); // Send 200 with empty results
+    // Inside app.get('/search', ...)
+try {
+    const searchResultsRaw = await youtubeDl(searchQuery, {
+        dumpSingleJson: true,
+        flatPlaylist: true,
+        defaultSearch: 'ytsearch',
+        noWarnings: true,
+        callHome: false,
+        noCheckCertificates: true,
+        exec: {
+            ytDlpPath: YTDLP_BIN_PATH
         }
+    });
 
-
-    } catch (error) {
-        console.error("Backend search error:", error);
-        res.status(500).json({ success: false, message: error.message || 'Failed to perform search.' });
+    console.log('Raw yt-dlp search results (entries count):', searchResultsRaw.entries ? searchResultsRaw.entries.length : 0);
+    // CRITICAL: Log the full (or large sample) raw results if any, so we can see what yt-dlp actually returned
+    if (searchResultsRaw.entries && searchResultsRaw.entries.length > 0) {
+        console.log('Raw yt-dlp search results (first 5 entries):', JSON.stringify(searchResultsRaw.entries.slice(0, 5), null, 2));
+    } else {
+        console.log('Raw yt-dlp search results: No entries found by yt-dlp.');
     }
-});
+
+    const formattedResults = (searchResultsRaw.entries || [])
+        .filter(entry => {
+            const isValidUrl = entry.webpage_url && (entry.webpage_url.includes('youtube.com/watch') || entry.webpage_url.includes('youtu.be/'));
+            if (!isValidUrl) {
+                console.log('Filtered out non-video entry:', entry.webpage_url || entry.title || 'Unknown entry');
+            }
+            return isValidUrl;
+        })
+        .map(entry => ({
+            title: entry.title,
+            artist: entry.uploader || entry.channel || 'Unknown',
+            url: entry.webpage_url,
+            youtubeId: entry.id,
+            thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`
+        }))
+        .slice(0, 15);
+
+    console.log(`Found ${formattedResults.length} formatted results after filtering.`);
+    // ... rest of your code ...
+} catch (error) {
+    // ... error handling ...
+}
 
 
 // Endpoint to get YouTube video metadata (title, artist)
@@ -256,4 +247,4 @@ app.post('/download-mp3', async (req, res) => {
 // Start the server
 app.listen(port, () => {
     console.log(`Backend server listening at ${BASE_URL}`);
-});
+})});
