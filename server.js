@@ -69,7 +69,7 @@ app.get('/search', async (req, res) => {
 
         // Filter and map results to a cleaner format
         const formattedResults = searchResults.entries
-            .filter(entry => entry.webpage_url.includes('youtube.com/watch')) // Only return individual video results
+            .filter(entry => entry.webpage_url && entry.webpage_url.includes('youtube.com/watch')) // Safer checkOnly return individual video results
             .map(entry => ({
                 title: entry.title,
                 artist: entry.channel || entry.uploader || 'Unknown',
