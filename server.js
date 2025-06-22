@@ -17,11 +17,10 @@ if (!fs.existsSync(audioDir)) {
 }
 
 // Initialize YouTube Data API
-// IMPORTANT: For production, store this securely as an environment variable on Render, not directly in code.
-// For now, replace 'YOUR_YOUTUBE_API_KEY_HERE' with the key you generated.
+// This now RELIES SOLELY on the environment variable 'YOUTUBE_API_KEY' set on Render.
 const youtube = google.youtube({
     version: 'v3',
-    auth: process.env.YOUTUBE_API_KEY || 'AIzaSyD-JYQR3X32KMqMsADuixw62etY8Y4SbfA' // Use env var if available, else hardcode for now
+    auth: process.env.YOUTUBE_API_KEY
 });
 
 
@@ -35,7 +34,7 @@ app.get('/search', async (req, res) => {
     console.log(`Received search request for: "${query}" (using YouTube Data API)`);
 
     try {
-        const response = await Youtube.list({
+        const response = await youtube.search.list({
             q: query,
             part: 'snippet',
             type: 'video',
@@ -54,7 +53,7 @@ app.get('/search', async (req, res) => {
             artist: item.snippet.channelTitle || 'Unknown',
             youtubeId: item.id.videoId,
             // Construct YouTube URL directly from videoId
-            url: `youtu.be/...2${item.id.videoId}`,
+            url: `https://www.youtube.com/watch?v=${item.id.videoId}`, // Corrected URL format for playback
             thumbnail: item.snippet.thumbnails.high.url || `https://i.ytimg.com/vi/${item.id.videoId}/hqdefault.jpg`
         }));
 
@@ -84,7 +83,13 @@ app.post('/download-mp3', async (req, res) => {
 
     const videoId = new URL(url).searchParams.get('v');
     if (!videoId) {
-        return res.status(400).json({ success: false, message: 'Invalid YouTube URL: missing video ID.' });
+        // If the URL is youtube.be short URL, extract videoId differently
+        const shortUrlMatch = url.match(/(?:youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/watch\?v=|\/watch\?v=)([a-zA-Z0-9_-]{11})/);
+        if (shortUrlMatch && shortUrlMatch[1]) {
+            videoId = shortUrlMatch[1];
+        } else {
+            return res.status(400).json({ success: false, message: 'Invalid YouTube URL: could not extract video ID.' });
+        }
     }
 
     const outputFilePath = path.join(audioDir, `${videoId}.mp3`);
