@@ -54,50 +54,60 @@ app.get('/search', async (req, res) => {
     }
 
     console.log(`Received search request for: "${searchQuery}"`);
-    // Inside app.get('/search', ...)
-try {
-    const searchResultsRaw = await youtubeDl(searchQuery, {
-        dumpSingleJson: true,
-        flatPlaylist: true,
-        defaultSearch: 'ytsearch',
-        noWarnings: true,
-        callHome: false,
-        noCheckCertificates: true,
-        exec: {
-            ytDlpPath: YTDLP_BIN_PATH
-        }
-    });
-
-    console.log('Raw yt-dlp search results (entries count):', searchResultsRaw.entries ? searchResultsRaw.entries.length : 0);
-    // CRITICAL: Log the full (or large sample) raw results if any, so we can see what yt-dlp actually returned
-    if (searchResultsRaw.entries && searchResultsRaw.entries.length > 0) {
-        console.log('Raw yt-dlp search results (first 5 entries):', JSON.stringify(searchResultsRaw.entries.slice(0, 5), null, 2));
-    } else {
-        console.log('Raw yt-dlp search results: No entries found by yt-dlp.');
-    }
-
-    const formattedResults = (searchResultsRaw.entries || [])
-        .filter(entry => {
-            const isValidUrl = entry.webpage_url && (entry.webpage_url.includes('youtube.com/watch') || entry.webpage_url.includes('youtu.be/'));
-            if (!isValidUrl) {
-                console.log('Filtered out non-video entry:', entry.webpage_url || entry.title || 'Unknown entry');
+    try {
+        const searchResultsRaw = await youtubeDl(searchQuery, {
+            dumpSingleJson: true,
+            flatPlaylist: true,
+            defaultSearch: 'ytsearch',
+            noWarnings: true,
+            callHome: false,
+            noCheckCertificates: true,
+            exec: {
+                ytDlpPath: YTDLP_BIN_PATH
             }
-            return isValidUrl;
-        })
-        .map(entry => ({
-            title: entry.title,
-            artist: entry.uploader || entry.channel || 'Unknown',
-            url: entry.webpage_url,
-            youtubeId: entry.id,
-            thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`
-        }))
-        .slice(0, 15);
+        });
 
-    console.log(`Found ${formattedResults.length} formatted results after filtering.`);
-    // ... rest of your code ...
-} catch (error) {
-    // ... error handling ...
-}
+        console.log('Raw yt-dlp search results (entries count):', searchResultsRaw.entries ? searchResultsRaw.entries.length : 0);
+        if (searchResultsRaw.entries && searchResultsRaw.entries.length > 0) {
+            console.log('Raw yt-dlp search results (first 5 entries):', JSON.stringify(searchResultsRaw.entries.slice(0, 5), null, 2));
+        } else {
+            console.log('Raw yt-dlp search results: No entries found by yt-dlp.');
+        }
+
+        const formattedResults = (searchResultsRaw.entries || [])
+            .filter(entry => {
+                const isValidUrl = entry.webpage_url && (entry.webpage_url.includes('youtube.com/watch') || entry.webpage_url.includes('youtu.be/'));
+                if (!isValidUrl) {
+                    console.log('Filtered out non-video entry:', entry.webpage_url || entry.title || 'Unknown entry');
+                }
+                return isValidUrl;
+            })
+            .map(entry => ({
+                title: entry.title,
+                artist: entry.uploader || entry.channel || 'Unknown',
+                url: entry.webpage_url,
+                youtubeId: entry.id,
+                thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`
+            }))
+            .slice(0, 15);
+
+        console.log(`Found ${formattedResults.length} formatted results after filtering.`);
+
+        if (formattedResults.length > 0) {
+            res.json({
+                success: true,
+                results: formattedResults
+            });
+        } else {
+            res.status(200).json({ success: false, message: 'No relevant video results found.', results: [] });
+        }
+
+
+    } catch (error) {
+        console.error("Backend search error:", error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to perform search.' });
+    }
+});
 
 
 // Endpoint to get YouTube video metadata (title, artist)
@@ -158,8 +168,6 @@ app.post('/download-mp3', async (req, res) => {
     console.log(`Output path for MP3: ${mp3FilePath}`);
 
     try {
-        // Step 1: Get video metadata using yt-dlp (re-fetch to be safe, or pass from frontend)
-        // Frontend now passes necessary info, but backend will ensure it's correct
         const videoInfo = await youtubeDl(url, {
             dumpSingleJson: true,
             noWarnings: true,
@@ -167,7 +175,7 @@ app.post('/download-mp3', async (req, res) => {
             noCheckCertificates: true,
             preferFreeFormats: true,
             youtubeSkipDashManifest: true,
-            format: 'bestaudio', // Request best audio format for info
+            format: 'bestaudio',
             exec: {
                 ytDlpPath: YTDLP_BIN_PATH
             }
@@ -177,13 +185,12 @@ app.post('/download-mp3', async (req, res) => {
         const artist = videoInfo.artist || videoInfo.uploader || 'Unknown Artist';
         console.log(`Found video: "${title}" by "${artist}"`);
 
-        // Step 2: Stream audio directly to ffmpeg for conversion
         console.log('Starting audio download stream and conversion to MP3...');
         await new Promise((resolve, reject) => {
             const audioProcess = youtubeDl.exec(url, {
-                format: 'bestaudio', // Get the direct audio stream URL
+                format: 'bestaudio',
                 printStderr: true,
-                getUrl: true, // Only print the URL, don't download
+                getUrl: true,
                 exec: {
                     ytDlpPath: YTDLP_BIN_PATH
                 }
@@ -199,7 +206,7 @@ app.post('/download-mp3', async (req, res) => {
                     console.log('Audio stream URL obtained:', audioStreamUrl);
                     ffmpeg(audioStreamUrl)
                         .audioCodec('libmp3lame')
-                        .audioBitrate(128) // You can adjust bitrate (e.g., 192, 256, 320)
+                        .audioBitrate(128)
                         .toFormat('mp3')
                         .save(mp3FilePath)
                         .on('end', () => {
@@ -222,7 +229,6 @@ app.post('/download-mp3', async (req, res) => {
             });
         });
 
-        // Construct the full public URL for the MP3 file
         const audioUrl = `${BASE_URL}/downloads/${uniqueId}.mp3`;
 
         res.json({
@@ -230,12 +236,11 @@ app.post('/download-mp3', async (req, res) => {
             message: 'Download and conversion successful!',
             title: title,
             artist: artist,
-            audioUrl: audioUrl // Send the full public URL to the frontend
+            audioUrl: audioUrl
         });
 
     } catch (error) {
         console.error("Server error during download/conversion:", error);
-        // Delete partially created files if any
         if (fs.existsSync(mp3FilePath)) {
             fs.unlinkSync(mp3FilePath);
             console.log(`Cleaned up partial file: ${mp3FilePath}`);
@@ -247,4 +252,4 @@ app.post('/download-mp3', async (req, res) => {
 // Start the server
 app.listen(port, () => {
     console.log(`Backend server listening at ${BASE_URL}`);
-})});
+});
