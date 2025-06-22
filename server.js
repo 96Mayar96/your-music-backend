@@ -55,7 +55,7 @@ app.get('/search', async (req, res) => {
 
     console.log(`Received search request for: "${searchQuery}"`);
     try {
-        const searchResults = await youtubeDl(searchQuery, {
+        const searchResultsRaw = await youtubeDl(searchQuery, {
             dumpSingleJson: true,
             flatPlaylist: true, // Treat results as a flat list
             defaultSearch: 'ytsearch', // Search YouTube directly
@@ -67,22 +67,40 @@ app.get('/search', async (req, res) => {
             }
         });
 
-        // Filter and map results to a cleaner format
-        const formattedResults = searchResults.entries
-            .filter(entry => entry.webpage_url && entry.webpage_url.includes('youtube.com/watch')) // Safer checkOnly return individual video results
+        console.log('Raw yt-dlp search results (entries count):', searchResultsRaw.entries ? searchResultsRaw.entries.length : 0);
+        // console.log('Raw yt-dlp search results sample:', searchResultsRaw.entries ? JSON.stringify(searchResultsRaw.entries.slice(0, 2), null, 2) : 'No entries'); // Log first 2 entries for debugging
+
+        const formattedResults = (searchResultsRaw.entries || []) // Ensure entries is an array
+            .filter(entry => {
+                // Filter for valid video URLs, handling potential undefined webpage_url
+                const isValidUrl = entry.webpage_url && (entry.webpage_url.includes('youtube.com/watch') || entry.webpage_url.includes('youtu.be/'));
+                if (!isValidUrl) {
+                    // console.log('Filtered out non-video entry:', entry.webpage_url || entry.title); // Log what's filtered out
+                }
+                return isValidUrl;
+            })
             .map(entry => ({
                 title: entry.title,
-                artist: entry.channel || entry.uploader || 'Unknown',
+                // Use uploader or channel as artist, fallback to 'Unknown'
+                artist: entry.uploader || entry.channel || 'Unknown',
                 url: entry.webpage_url, // Full YouTube URL
                 youtubeId: entry.id, // YouTube Video ID
-                thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg` // Fallback thumbnail
+                // Use available thumbnail, or construct a reliable default
+                thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`
             }))
-            .slice(0, 10); // Limit to top 10 results for performance
+            .slice(0, 15); // Increased limit to 15 to get more options
 
-        res.json({
-            success: true,
-            results: formattedResults
-        });
+        console.log(`Found ${formattedResults.length} formatted results.`);
+
+        if (formattedResults.length > 0) {
+            res.json({
+                success: true,
+                results: formattedResults
+            });
+        } else {
+            res.status(200).json({ success: false, message: 'No relevant video results found.', results: [] }); // Send 200 with empty results
+        }
+
 
     } catch (error) {
         console.error("Backend search error:", error);
