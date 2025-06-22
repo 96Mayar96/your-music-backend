@@ -7,27 +7,19 @@ const path = require('path');
 const fs = require('fs');
 
 // --- Configuration ---
-// On Render (using Dockerfile), these binaries will be installed into the container's PATH.
-// For local testing, ensure `yt-dlp` and `ffmpeg` are installed and in your system's PATH.
 const YTDLP_BIN_PATH = process.env.YTDLP_BIN || 'yt-dlp';
 const FFMPEG_BIN_PATH = process.env.FFMPEG_BIN || 'ffmpeg';
 
 // Set FFmpeg paths for fluent-ffmpeg
 ffmpeg.setFfmpegPath(FFMPEG_BIN_PATH);
-ffmpeg.setFfprobePath(FFMPEG_BIN_PATH); // ffprobe is usually part of the ffmpeg package
+ffmpeg.setFfprobePath(FFMPEG_BIN_PATH);
 
 const app = express();
-// Use process.env.PORT provided by Render or default to 3000 for local development
 const port = process.env.PORT || 3000;
 
-// Determine the base URL for serving files.
 const BASE_URL = process.env.RENDER_EXTERNAL_HOSTNAME
   ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
   : `http://localhost:${port}`;
-
-// --- Middleware ---
-app.use(cors()); // Enable CORS for all origins (important for your frontend)
-app.use(express.json()); // For parsing application/json bodies
 
 // Directory to store downloaded MP3s temporarily
 const downloadsDir = path.join(__dirname, 'downloads');
@@ -36,8 +28,11 @@ if (!fs.existsSync(downloadsDir)) {
     console.log(`Created downloads directory: ${downloadsDir}`);
 }
 
+// --- Middleware ---
+app.use(cors()); // Enable CORS for all origins (important for your frontend)
+app.use(express.json()); // For parsing application/json bodies
+
 // Serve static files from the 'downloads' directory
-// This allows your frontend to fetch the MP3s directly from your backend's URL
 app.use('/downloads', express.static(downloadsDir, {
     setHeaders: (res, path, stat) => {
         res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
@@ -49,6 +44,90 @@ app.use('/downloads', express.static(downloadsDir, {
 // Simple health check route
 app.get('/', (req, res) => {
     res.send('Your Music Backend is running!');
+});
+
+// NEW: Endpoint to search YouTube for videos
+app.get('/search', async (req, res) => {
+    const searchQuery = req.query.q;
+    if (!searchQuery) {
+        return res.status(400).json({ success: false, message: 'Search query is required.' });
+    }
+
+    console.log(`Received search request for: "${searchQuery}"`);
+    try {
+        const searchResults = await youtubeDl(searchQuery, {
+            dumpSingleJson: true,
+            flatPlaylist: true, // Treat results as a flat list
+            defaultSearch: 'ytsearch', // Search YouTube directly
+            noWarnings: true,
+            callHome: false,
+            noCheckCertificates: true,
+            exec: {
+                ytDlpPath: YTDLP_BIN_PATH
+            }
+        });
+
+        // Filter and map results to a cleaner format
+        const formattedResults = searchResults.entries
+            .filter(entry => entry.webpage_url.includes('youtube.com/watch')) // Only return individual video results
+            .map(entry => ({
+                title: entry.title,
+                artist: entry.channel || entry.uploader || 'Unknown',
+                url: entry.webpage_url, // Full YouTube URL
+                youtubeId: entry.id, // YouTube Video ID
+                thumbnail: entry.thumbnail || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg` // Fallback thumbnail
+            }))
+            .slice(0, 10); // Limit to top 10 results for performance
+
+        res.json({
+            success: true,
+            results: formattedResults
+        });
+
+    } catch (error) {
+        console.error("Backend search error:", error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to perform search.' });
+    }
+});
+
+
+// Endpoint to get YouTube video metadata (title, artist)
+app.get('/info', async (req, res) => {
+    const videoURL = req.query.url;
+    if (!videoURL) {
+        return res.status(400).json({ success: false, message: 'YouTube URL is required.' });
+    }
+    if (!videoURL.includes('youtube.com') && !videoURL.includes('youtu.be')) {
+        return res.status(400).json({ success: false, message: 'Invalid YouTube URL provided.' });
+    }
+
+    try {
+        const videoInfo = await youtubeDl(videoURL, {
+            dumpSingleJson: true,
+            noWarnings: true,
+            callHome: false,
+            noCheckCertificates: true,
+            preferFreeFormats: true,
+            youtubeSkipDashManifest: true,
+            format: 'bestaudio', // Only get audio format info
+            exec: {
+                ytDlpPath: YTDLP_BIN_PATH
+            }
+        });
+
+        res.json({
+            success: true,
+            title: videoInfo.title || 'Unknown Title',
+            artist: videoInfo.artist || videoInfo.uploader || 'Unknown Artist',
+            duration: videoInfo.duration_string || 'N/A',
+            thumbnail: videoInfo.thumbnail || `https://i.ytimg.com/vi/${videoInfo.id}/hqdefault.jpg`,
+            youtubeId: videoInfo.id
+        });
+
+    } catch (error) {
+        console.error("Error fetching video info:", error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to fetch video information.' });
+    }
 });
 
 // Endpoint to download and convert YouTube video to MP3
@@ -70,8 +149,8 @@ app.post('/download-mp3', async (req, res) => {
     console.log(`Output path for MP3: ${mp3FilePath}`);
 
     try {
-        // Step 1: Get video metadata using yt-dlp
-        console.log('Fetching video info...');
+        // Step 1: Get video metadata using yt-dlp (re-fetch to be safe, or pass from frontend)
+        // Frontend now passes necessary info, but backend will ensure it's correct
         const videoInfo = await youtubeDl(url, {
             dumpSingleJson: true,
             noWarnings: true,
