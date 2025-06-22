@@ -76,9 +76,10 @@ app.get('/search', async (req, res) => {
 
         const formattedResults = (searchResultsRaw.entries || [])
             .filter(entry => {
-                const isValidUrl = entry.webpage_url && (entry.webpage_url.includes('youtube.com/watch') || entry.webpage_url.includes('youtu.be/'));
+                // Ensure 'url' exists and is a YouTube video URL
+                const isValidUrl = entry.url && (entry.url.includes('youtube.com/watch') || entry.url.includes('youtu.be/'));
                 if (!isValidUrl) {
-                    console.log('Filtered out non-video entry:', entry.webpage_url || entry.title || 'Unknown entry');
+                    console.log('Filtered out non-video entry (URL was not valid YouTube video):', entry.url || entry.title || 'Unknown entry');
                 }
                 return isValidUrl;
             })
