@@ -25,10 +25,10 @@ app.get('/search', async (req, res) => {
 
     console.log(`Received search request for: "${query}" (SoundCloud search via yt-dlp)`);
 
-    // Added --no-check-certificate, --prefer-https, and increased network timeout
-    const command = `yt-dlp --dump-json --flat-playlist --default-search "scsearch" --max-downloads 1000 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${query}"`;
+    // Removed --prefer-https
+    const command = `yt-dlp --dump-json --flat-playlist --default-search "scsearch" --max-downloads 1000 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 300 "${query}"`;
 
-    exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => { // Increased buffer significantly for 1000 results
+    exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
         if (error) {
             console.error(`exec error for /search: ${error}`);
             console.error(`stderr for /search: ${stderr}`);
@@ -41,6 +41,8 @@ app.get('/search', async (req, res) => {
                 errorMessage = 'Could not process search results from SoundCloud. It might be a temporary issue.';
             } else if (stderr.includes('timed out')) {
                 errorMessage = 'SoundCloud search timed out. The server might be too slow or network issues.';
+            } else if (stderr.includes('no such option')) { // Catch new errors about unsupported options
+                 errorMessage = `An unsupported yt-dlp option was used. Please check backend logs.`;
             }
             return res.status(500).json({ success: false, message: errorMessage, stderr: stderr });
         }
@@ -53,7 +55,7 @@ app.get('/search', async (req, res) => {
             const formattedResults = [];
 
             for (const line of rawResults) {
-                if (line.trim()) { // Ensure line is not empty
+                if (line.trim()) {
                     try {
                         const metadata = JSON.parse(line);
                         if (metadata.extractor_key && metadata.extractor_key.includes('Soundcloud')) {
@@ -101,7 +103,7 @@ app.post('/download-mp3', async (req, res) => {
 
     if (fs.existsSync(outputFilePath)) {
         console.log(`MP3 for URL hash ${hash} already exists. Serving existing file.`);
-        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${url}"`;
+        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 300 "${url}"`; // Removed --prefer-https
         exec(metadataCommand, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
             if (metaError) {
                 console.warn(`Error getting metadata for existing file ${url}: ${metaError.message}`);
@@ -140,8 +142,8 @@ app.post('/download-mp3', async (req, res) => {
     }
 
     console.log(`Starting download for ${url}`);
-    // Added --no-check-certificate, --prefer-https, and --socket-timeout
-    const command = `yt-dlp -x --audio-format mp3 -o "${outputFilePath}" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${url}"`;
+    // Removed --prefer-https
+    const command = `yt-dlp -x --audio-format mp3 -o "${outputFilePath}" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 300 "${url}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 10 }, async (error, stdout, stderr) => {
         if (error) {
@@ -157,6 +159,8 @@ app.post('/download-mp3', async (req, res) => {
                 errorMessage = 'Unsupported URL for download. Please ensure it is a valid video/audio page.';
             } else if (stderr.includes('timed out')) {
                 errorMessage = 'Download timed out. The server might be too slow or network issues.';
+            } else if (stderr.includes('no such option')) { // Catch new errors about unsupported options
+                 errorMessage = `An unsupported yt-dlp option was used. Please check backend logs.`;
             }
             return res.status(500).json({ success: false, message: errorMessage, stderr: stderr });
         }
@@ -167,7 +171,7 @@ app.post('/download-mp3', async (req, res) => {
         console.log(`Download/Conversion successful for ${url}`);
 
         // After successful download, extract metadata using yt-dlp --print-json to send back
-        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --prefer-https --socket-timeout 300 "${url}"`;
+        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 300 "${url}"`; // Removed --prefer-https
         exec(metadataCommand, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
             if (metaError) {
                 console.error(`exec error for metadata after download: ${metaError}`);
