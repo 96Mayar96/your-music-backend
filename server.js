@@ -43,13 +43,12 @@ app.get('/search', async (req, res) => {
     // Command to search SoundCloud, dump JSON metadata, and use a user-agent
     // --dump-json: output JSON data for each video
     // --flat-playlist: only extract direct entries from playlists (important for search results)
-    // --default-search "scsearch": tells yt-dlp to search SoundCloud specifically
     // --user-agent: helps bypass some bot detections
     // --no-check-certificate: helps with potential SSL issues on some environments
     // --socket-timeout 60: set socket timeout to 60 seconds
-    // --extract-audio: ensures we get audio track results
-    // --playlist-items 1-20: get first 20 results from search
-    const command = `yt-dlp --dump-json --flat-playlist --default-search "scsearch" --playlist-items 1-20 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${query}"`;
+    // Use direct SoundCloud search URL instead of default search
+    const soundcloudSearchUrl = `https://soundcloud.com/search?q=${encodeURIComponent(query)}`;
+    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${soundcloudSearchUrl}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
         if (error) {
@@ -109,6 +108,56 @@ app.get('/search', async (req, res) => {
             }
 
             console.log(`Successfully found ${formattedResults.length} SoundCloud results for: "${query}"`);
+            
+            // If we only got 1 result, try a different search approach
+            if (formattedResults.length <= 1) {
+                console.log(`Only ${formattedResults.length} result found, trying alternative search method...`);
+                
+                // Try a different search approach using scsearch: prefix
+                const fallbackCommand = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch:${query}"`;
+                
+                exec(fallbackCommand, { maxBuffer: 1024 * 1024 * 50 }, (fallbackError, fallbackStdout, fallbackStderr) => {
+                    if (!fallbackError && fallbackStdout.trim()) {
+                        const fallbackRawResults = fallbackStdout.trim().split('\n');
+                        const fallbackFormattedResults = [];
+                        
+                        console.log(`Fallback search returned ${fallbackRawResults.length} lines`);
+                        
+                        for (const line of fallbackRawResults) {
+                            if (line.trim()) {
+                                try {
+                                    const metadata = JSON.parse(line);
+                                    if (metadata.extractor_key && metadata.extractor_key.includes('Soundcloud')) {
+                                        fallbackFormattedResults.push({
+                                            title: metadata.title,
+                                            artist: metadata.uploader || metadata.channel || 'Unknown',
+                                            url: metadata.webpage_url,
+                                            thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
+                                        });
+                                    }
+                                } catch (parseLineError) {
+                                    console.warn(`Failed to parse fallback result: ${parseLineError.message}`);
+                                }
+                            }
+                        }
+                        
+                        console.log(`Fallback search found ${fallbackFormattedResults.length} results`);
+                        
+                        // Use fallback results if they're better
+                        if (fallbackFormattedResults.length > formattedResults.length) {
+                            return res.json({ success: true, results: fallbackFormattedResults });
+                        }
+                    }
+                    
+                    // Return original results if fallback didn't help
+                    if (formattedResults.length === 0 && rawResults.length > 0) {
+                        return res.status(200).json({ success: false, message: 'No relevant SoundCloud songs found. Try a more specific query.', results: [] });
+                    }
+                    res.json({ success: true, results: formattedResults });
+                });
+                return; // Exit here to avoid double response
+            }
+            
             if (formattedResults.length === 0 && rawResults.length > 0) {
                 // This means yt-dlp found something, but we filtered it out (e.g., non-SoundCloud)
                 return res.status(200).json({ success: false, message: 'No relevant SoundCloud songs found. Try a more specific query.', results: [] });
