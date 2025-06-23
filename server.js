@@ -44,12 +44,12 @@ app.get('/search', async (req, res) => {
     // --dump-json: output JSON data for each video
     // --flat-playlist: only extract direct entries from playlists (important for search results)
     // --default-search "scsearch": tells yt-dlp to search SoundCloud specifically
-    // --max-downloads 1000: set a high limit (though for search, it's about finding metadata)
     // --user-agent: helps bypass some bot detections
     // --no-check-certificate: helps with potential SSL issues on some environments
     // --socket-timeout 60: set socket timeout to 60 seconds
-    // --no-simulate: Ensures full data extraction for search, not just simulation
-    const command = `yt-dlp --dump-json --flat-playlist --default-search "scsearch" --max-downloads 100 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 --no-simulate "${query}"`;
+    // --extract-audio: ensures we get audio track results
+    // --playlist-items 1-20: get first 20 results from search
+    const command = `yt-dlp --dump-json --flat-playlist --default-search "scsearch" --playlist-items 1-20 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${query}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
         if (error) {
@@ -59,7 +59,7 @@ app.get('/search', async (req, res) => {
 
             if (stderr.includes('No entries found')) {
                 errorMessage = 'No songs found on SoundCloud for this query. Try a different name.';
-            } else if (stderr.includes('Sign in to confirm you’re not a bot') || stderr.includes('Please log in')) {
+            } else if (stderr.includes('Sign in to confirm you\'re not a bot') || stderr.includes('Please log in')) {
                 errorMessage = 'SoundCloud search blocked (bot detection/login required).';
             } else if (stderr.includes('Unable to extract') || stderr.includes('ERROR')) {
                 errorMessage = 'Could not process search results from SoundCloud. It might be a temporary issue or content restrictions.';
@@ -81,10 +81,15 @@ app.get('/search', async (req, res) => {
             const rawResults = stdout.trim().split('\n');
             const formattedResults = [];
 
+            console.log(`Raw yt-dlp output has ${rawResults.length} lines`);
+            console.log(`First few lines of raw output:`, rawResults.slice(0, 3));
+
             for (const line of rawResults) {
                 if (line.trim()) {
                     try {
                         const metadata = JSON.parse(line);
+                        console.log(`Processing result: ${metadata.title} by ${metadata.uploader} (extractor: ${metadata.extractor_key})`);
+                        
                         // Filter for SoundCloud results
                         if (metadata.extractor_key && metadata.extractor_key.includes('Soundcloud')) {
                             formattedResults.push({
@@ -94,6 +99,8 @@ app.get('/search', async (req, res) => {
                                 // Prefer the last (highest resolution) thumbnail if available
                                 thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
                             });
+                        } else {
+                            console.log(`Skipping non-SoundCloud result: ${metadata.extractor_key}`);
                         }
                     } catch (parseLineError) {
                         console.warn(`Failed to parse a line of search result JSON: ${parseLineError.message} - Line: "${line.substring(0, 100)}..."`);
@@ -192,7 +199,7 @@ app.post('/download-mp3', async (req, res) => {
             console.error(`stderr: ${stderr}`);
             let errorMessage = `Failed to download or convert: ${error.message}`;
 
-            if (stderr.includes('Sign in to confirm you’re not a bot') || stderr.includes('Please log in')) {
+            if (stderr.includes('Sign in to confirm you\'re not a bot') || stderr.includes('Please log in')) {
                 errorMessage = 'Download blocked by source website (bot detection/login required).';
             } else if (stderr.includes('No such video') || stderr.includes('Private video') || stderr.includes('unavailable')) {
                 errorMessage = 'Track not found, unavailable, or is private.';

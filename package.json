@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "build": "react-scripts --max-old-space-size=8192 build",
     "postinstall": "apt-get update && apt-get install -y python3-pip && pip3 install --upgrade yt-dlp --break-system-packages",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
