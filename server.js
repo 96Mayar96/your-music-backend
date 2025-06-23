@@ -39,16 +39,10 @@ app.get('/search', async (req, res) => {
     }
 
     console.log(`Received search request for: "${query}" (SoundCloud search via yt-dlp)`);
+    console.log(`Using command: ${command}`);
 
-    // Command to search SoundCloud, dump JSON metadata, and use a user-agent
-    // --dump-json: output JSON data for each video
-    // --flat-playlist: only extract direct entries from playlists (important for search results)
-    // --user-agent: helps bypass some bot detections
-    // --no-check-certificate: helps with potential SSL issues on some environments
-    // --socket-timeout 60: set socket timeout to 60 seconds
-    // Use direct SoundCloud search URL instead of default search
-    const soundcloudSearchUrl = `https://soundcloud.com/search?q=${encodeURIComponent(query)}`;
-    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${soundcloudSearchUrl}"`;
+    // Use scsearch: prefix method which is specifically designed for SoundCloud searches in yt-dlp
+    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch:${query}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
         if (error) {
@@ -113,8 +107,8 @@ app.get('/search', async (req, res) => {
             if (formattedResults.length <= 1) {
                 console.log(`Only ${formattedResults.length} result found, trying alternative search method...`);
                 
-                // Try a different search approach using scsearch: prefix
-                const fallbackCommand = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch:${query}"`;
+                // Try a different search approach using direct SoundCloud search URL
+                const fallbackCommand = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "https://soundcloud.com/search/sounds?q=${encodeURIComponent(query)}"`;
                 
                 exec(fallbackCommand, { maxBuffer: 1024 * 1024 * 50 }, (fallbackError, fallbackStdout, fallbackStderr) => {
                     if (!fallbackError && fallbackStdout.trim()) {
