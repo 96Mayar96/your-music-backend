@@ -1,12 +1,44 @@
+// server.js
 const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto'); // For hashing URLs
+const NodeCache = require('node-cache'); // Import node-cache
+
+// Firebase Admin SDK Imports
+const admin = require('firebase-admin');
+
+// Initialize Firebase Admin SDK
+// IMPORTANT: Replace process.env.FIREBASE_ADMIN_SDK_CONFIG with your actual JSON config
+// Best practice: Store this JSON content in an environment variable on your hosting platform (e.g., Render)
+let firebaseAdminInitialized = false;
+try {
+    // Check if the environment variable is set
+    if (!process.env.FIREBASE_ADMIN_SDK_CONFIG) {
+        throw new Error("FIREBASE_ADMIN_SDK_CONFIG environment variable is not set.");
+    }
+    const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_SDK_CONFIG);
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        // !! IMPORTANT !! This has been updated with your provided bucket URL
+        storageBucket: "yourmusicplayerapp.firebasestorage.app" 
+    });
+    console.log("Firebase Admin SDK initialized successfully.");
+    firebaseAdminInitialized = true;
+} catch (error) {
+    console.error("Failed to initialize Firebase Admin SDK:", error.message);
+    console.error("Please ensure FIREBASE_ADMIN_SDK_CONFIG environment variable is correctly set with the service account JSON.");
+    // Optionally, you might want to stop the server if Firebase initialization is critical
+    // process.exit(1); 
+}
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+
+// Initialize NodeCache for search results with a TTL of 1 hour (3600 seconds)
+const searchCache = new NodeCache({ stdTTL: 3600 });
 
 // Middleware
 app.use(cors({
@@ -15,36 +47,47 @@ app.use(cors({
 })); // Enable CORS for specific origins
 app.use(express.json()); // Parse JSON request bodies
 
-// Directory to store audio files
-const audioDir = path.join(__dirname, 'audio');
+// Directory to store audio files temporarily (before uploading to Firebase Storage)
+// Changed to audio_temp as files won't persist here in a cloud environment
+const audioDir = path.join(__dirname, 'audio_temp'); 
 if (!fs.existsSync(audioDir)) {
-    console.log(`Creating audio directory: ${audioDir}`);
+    console.log(`Creating temporary audio directory: ${audioDir}`);
     fs.mkdirSync(audioDir);
 }
 
-// Serve static audio files from the 'audio' directory
+// Serve static audio files from the 'audio_temp' directory.
+// This is primarily for temporary local testing or debugging.
+// For production with Firebase Storage, frontend will directly access Firebase URLs.
 app.use('/audio', express.static(audioDir));
 
 // Root endpoint for a basic status check
 app.get('/', (req, res) => {
-    res.send('Music Player Backend is running! Audio directory created if needed.');
+    res.send('Music Player Backend is running! Temporary audio directory created if needed.');
 });
 
 /**
- * NEW /search endpoint
+ * /search endpoint
  * Performs a SoundCloud search by name using yt-dlp.
  * Expects a query parameter 'q'.
+ * Caches results for better performance.
  */
 app.get('/search', async (req, res) => {
-    const query = req.query.q; // Expecting a search query (song name)
+    const query = req.query.q;
     if (!query) {
         return res.status(400).json({ success: false, message: 'Search query is required.' });
     }
 
-    console.log(`Received search request for: "${query}" (SoundCloud search via yt-dlp)`);
+    const cacheKey = `search_${query}`;
+    const cachedResults = searchCache.get(cacheKey);
 
-    // Use ytsearch: prefix to search YouTube and filter for SoundCloud results
-    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "ytsearch10:${query}"`;
+    if (cachedResults) {
+        console.log(`Serving search results for "${query}" from cache.`);
+        return res.json({ success: true, results: cachedResults });
+    }
+
+    console.log(`Searching SoundCloud for: ${query}`);
+    // Use 'scsearch10:' to limit results to SoundCloud and fetch up to 10 results
+    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch10:${query}"`;
     console.log(`Using command: ${command}`);
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
@@ -74,93 +117,25 @@ app.get('/search', async (req, res) => {
         }
 
         try {
-            const rawResults = stdout.trim().split('\n');
-            const formattedResults = [];
-
-            console.log(`Raw yt-dlp output has ${rawResults.length} lines`);
-            console.log(`First few lines of raw output:`, rawResults.slice(0, 3));
-
-            for (const line of rawResults) {
-                if (line.trim()) {
-                    try {
-                        const metadata = JSON.parse(line);
-                        console.log(`Processing result: ${metadata.title} by ${metadata.uploader} (extractor: ${metadata.extractor_key})`);
-                        
-                        // Filter for SoundCloud results or YouTube music results
-                        if ((metadata.extractor_key && metadata.extractor_key.includes('Soundcloud')) || 
-                            (metadata.extractor_key && metadata.extractor_key.includes('Youtube') && metadata.duration)) {
-                            formattedResults.push({
-                                title: metadata.title,
-                                artist: metadata.uploader || metadata.channel || 'Unknown',
-                                url: metadata.webpage_url,
-                                // Prefer the last (highest resolution) thumbnail if available
-                                thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
-                            });
-                        } else {
-                            console.log(`Skipping result: ${metadata.extractor_key} - ${metadata.title}`);
-                        }
-                    } catch (parseLineError) {
-                        console.warn(`Failed to parse a line of search result JSON: ${parseLineError.message} - Line: "${line.substring(0, 100)}..."`);
-                    }
+            const lines = stdout.split('\n').filter(line => line.trim() !== '');
+            const results = lines.map(line => {
+                try {
+                    const data = JSON.parse(line);
+                    return {
+                        id: data.id,
+                        title: data.title,
+                        url: data.url,
+                        artist: data.artist || data.uploader || data.channel || 'Unknown',
+                        thumbnail: data.thumbnail || `https://placehold.co/60x60/333/FFF?text=🎧`
+                    };
+                } catch (parseError) {
+                    console.warn('Could not parse JSON line from yt-dlp output:', line, parseError);
+                    return null;
                 }
-            }
+            }).filter(item => item !== null);
 
-            console.log(`Successfully found ${formattedResults.length} SoundCloud results for: "${query}"`);
-            
-            // If we only got 1 result, try a different search approach
-            if (formattedResults.length <= 1) {
-                console.log(`Only ${formattedResults.length} result found, trying alternative search method...`);
-                
-                // Try a different search approach using direct SoundCloud search URL as fallback
-                const fallbackCommand = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "https://soundcloud.com/search/sounds?q=${encodeURIComponent(query)}"`;
-                
-                exec(fallbackCommand, { maxBuffer: 1024 * 1024 * 50 }, (fallbackError, fallbackStdout, fallbackStderr) => {
-                    if (!fallbackError && fallbackStdout.trim()) {
-                        const fallbackRawResults = fallbackStdout.trim().split('\n');
-                        const fallbackFormattedResults = [];
-                        
-                        console.log(`Fallback search returned ${fallbackRawResults.length} lines`);
-                        
-                        for (const line of fallbackRawResults) {
-                            if (line.trim()) {
-                                try {
-                                    const metadata = JSON.parse(line);
-                                    if (metadata.extractor_key && metadata.extractor_key.includes('Soundcloud')) {
-                                        fallbackFormattedResults.push({
-                                            title: metadata.title,
-                                            artist: metadata.uploader || metadata.channel || 'Unknown',
-                                            url: metadata.webpage_url,
-                                            thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
-                                        });
-                                    }
-                                } catch (parseLineError) {
-                                    console.warn(`Failed to parse fallback result: ${parseLineError.message}`);
-                                }
-                            }
-                        }
-                        
-                        console.log(`Fallback search found ${fallbackFormattedResults.length} results`);
-                        
-                        // Use fallback results if they're better
-                        if (fallbackFormattedResults.length > formattedResults.length) {
-                            return res.json({ success: true, results: fallbackFormattedResults });
-                        }
-                    }
-                    
-                    // Return original results if fallback didn't help
-                    if (formattedResults.length === 0 && rawResults.length > 0) {
-                        return res.status(200).json({ success: false, message: 'No relevant SoundCloud songs found. Try a more specific query.', results: [] });
-                    }
-                    res.json({ success: true, results: formattedResults });
-                });
-                return; // Exit here to avoid double response
-            }
-            
-            if (formattedResults.length === 0 && rawResults.length > 0) {
-                // This means yt-dlp found something, but we filtered it out (e.g., non-SoundCloud)
-                return res.status(200).json({ success: false, message: 'No relevant SoundCloud songs found. Try a more specific query.', results: [] });
-            }
-            res.json({ success: true, results: formattedResults });
+            searchCache.set(cacheKey, results);
+            res.json({ success: true, results });
 
         } catch (parseError) {
             console.error(`Failed to parse yt-dlp search JSON or process results: ${parseError.message}`);
@@ -171,7 +146,8 @@ app.get('/search', async (req, res) => {
 
 /**
  * /download-mp3 endpoint
- * Downloads audio from a given URL (e.g., SoundCloud) and converts it to MP3.
+ * Downloads audio from a given URL, converts it to MP3,
+ * uploads it to Firebase Storage, and returns the public URL.
  * Expects a JSON body with a 'url' property.
  */
 app.post('/download-mp3', async (req, res) => {
@@ -179,66 +155,81 @@ app.post('/download-mp3', async (req, res) => {
     const { url } = req.body;
     console.log('Backend: Extracted URL from body:', url);
 
+    if (!firebaseAdminInitialized) {
+        return res.status(500).json({ success: false, message: 'Firebase Admin SDK is not initialized. Cannot process download and upload to storage.' });
+    }
     if (!url) {
         return res.status(400).json({ success: false, message: 'Source URL is required for download.' });
     }
 
-    // Create a unique hash for the URL to use as a filename, preventing duplicates
-    const hash = crypto.createHash('md5').update(url).digest('hex');
-    const outputFileName = `${hash}.mp3`;
-    const outputFilePath = path.join(audioDir, outputFileName);
-    // Construct the public URL for the audio file. req.hostname will be Render's domain.
-    const publicAudioUrl = `https://${req.hostname}/audio/${outputFileName}`;
+    const bucket = admin.storage().bucket();
+    // Use a hash of the original URL as the filename to prevent issues with special characters and ensure uniqueness
+    const filenameHash = crypto.createHash('md5').update(url).digest('hex');
+    const localOutputFileName = `${filenameHash}.mp3`;
+    const localOutputFilePath = path.join(audioDir, localOutputFileName); // Temporary local path
+    const firebaseStoragePath = `audio/${localOutputFileName}`; // Path in Firebase Storage
 
-    // Check if the file already exists to avoid re-downloading
-    if (fs.existsSync(outputFilePath)) {
-        console.log(`MP3 for URL hash ${hash} already exists. Serving existing file.`);
-        // Even if file exists, try to fetch fresh metadata in case title/artist is needed
-        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${url}"`;
-        exec(metadataCommand, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
-            if (metaError) {
-                console.warn(`Error getting metadata for existing file ${url}: ${metaError.message}. Sending generic metadata.`);
-                return res.json({
-                    success: true,
-                    message: 'Audio already processed and available.',
-                    audioUrl: publicAudioUrl,
-                    title: `Previously Downloaded Track (ID: ${hash.substring(0, 8)})`,
-                    artist: 'Unknown',
-                    thumbnail: null
-                });
-            }
-            try {
-                const metadata = JSON.parse(metaStdout);
-                res.json({
-                    success: true,
-                    message: 'Audio already processed and available.',
-                    audioUrl: publicAudioUrl,
-                    title: metadata.title,
-                    artist: metadata.uploader || metadata.channel || 'Unknown',
-                    thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
-                });
-            } catch (parseMetaError) {
-                console.error(`Failed to parse metadata JSON for existing file: ${parseMetaError.message}`);
-                res.status(500).json({ success: false, message: 'Failed to parse metadata for existing file.' });
-            }
-        });
-        return; // Exit here if file already exists
+    // 1. Check if the file already exists in Firebase Storage
+    let publicAudioUrl = null;
+    try {
+        const fileRef = bucket.file(firebaseStoragePath);
+        const [exists] = await fileRef.exists();
+        if (exists) {
+            console.log(`File for URL hash ${filenameHash} already exists in Firebase Storage. Serving existing URL.`);
+            // Get the public download URL for the existing file
+            publicAudioUrl = await fileRef.getSignedUrl({
+                action: 'read',
+                expires: '03-09-2491', // A very distant future date for effectively permanent public access
+            });
+            publicAudioUrl = publicAudioUrl[0]; // getSignedUrl returns an array
+
+            // Try to get fresh metadata, if not, use generic
+            exec(`yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${url}"`, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout) => {
+                if (metaError) {
+                    console.warn(`Error getting metadata for existing Firebase Storage file ${url}: ${metaError.message}. Sending generic metadata.`);
+                    return res.json({
+                        success: true,
+                        message: 'Audio already processed and available.',
+                        audioUrl: publicAudioUrl,
+                        title: `Previously Downloaded Track (ID: ${filenameHash.substring(0, 8)})`,
+                        artist: 'Unknown',
+                        thumbnail: null
+                    });
+                }
+                try {
+                    const metadata = JSON.parse(metaStdout);
+                    res.json({
+                        success: true,
+                        message: 'Audio already processed and available.',
+                        audioUrl: publicAudioUrl,
+                        title: metadata.title,
+                        artist: metadata.uploader || metadata.channel || 'Unknown',
+                        thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
+                    });
+                } catch (parseMetaError) {
+                    console.error(`Failed to parse metadata JSON for existing Firebase Storage file: ${parseMetaError.message}`);
+                    res.status(500).json({ success: false, message: 'Failed to parse metadata for existing file from Firebase Storage.' });
+                }
+            });
+            return; // Exit if file exists and served from Storage
+        }
+    } catch (firebaseCheckError) {
+        console.error(`Error checking Firebase Storage file existence for ${url}: ${firebaseCheckError.message}`);
+        // If checking fails, proceed with download to Firebase Storage.
+        // This might happen due to permissions or network issues with Firebase itself.
     }
 
-    console.log(`Starting download and conversion for ${url} to ${outputFilePath}`);
-    // Command to extract audio, convert to mp3, and save to outputFilePath
-    // -x: extract audio
-    // --audio-format mp3: convert extracted audio to mp3
-    // -o: output filename template (here, directly the full path)
-    // --force-overwrites: ensure file is overwritten if partially exists (e.g., from failed previous attempt)
-    const command = `yt-dlp -x --audio-format mp3 -o "${outputFilePath}" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 --force-overwrites "${url}"`;
+
+    console.log(`Starting download and conversion for ${url} to temporary local path: ${localOutputFilePath}`);
+    // Command to extract audio, convert to mp3, and save to localOutputFilePath
+    const command = `yt-dlp -x --audio-format mp3 -o "${localOutputFilePath}" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 --force-overwrites "${url}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 10 }, async (error, stdout, stderr) => {
         if (error) {
-            // Clean up potentially incomplete file
-            if (fs.existsSync(outputFilePath)) {
-                fs.unlinkSync(outputFilePath);
-                console.log(`Cleaned up incomplete file: ${outputFilePath}`);
+            // Clean up potentially incomplete local file
+            if (fs.existsSync(localOutputFilePath)) {
+                fs.unlinkSync(localOutputFilePath);
+                console.log(`Cleaned up incomplete local file: ${localOutputFilePath}`);
             }
 
             console.error(`exec error for download: ${error.message}`);
@@ -267,16 +258,52 @@ app.post('/download-mp3', async (req, res) => {
             console.warn(`stderr for download (non-error output): ${stderr}`);
         }
 
-        console.log(`Download/Conversion successful for ${url}`);
+        console.log(`Download/Conversion successful for ${url} to local temporary storage.`);
 
-        // After successful download, extract metadata using yt-dlp --print-json to send back to frontend
-        const metadataCommand = `yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${url}"`;
-        exec(metadataCommand, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
+        // 2. Upload to Firebase Storage
+        try {
+            console.log(`Uploading ${localOutputFilePath} to Firebase Storage at ${firebaseStoragePath}`);
+            await bucket.upload(localOutputFilePath, {
+                destination: firebaseStoragePath,
+                metadata: {
+                    contentType: 'audio/mpeg', // Set correct content type
+                },
+                public: true, 
+            });
+            console.log(`Successfully uploaded to Firebase Storage.`);
+
+            // Get the public download URL.
+            publicAudioUrl = await bucket.file(firebaseStoragePath).getSignedUrl({
+                action: 'read',
+                expires: '03-09-2491', // A very distant future date to ensure the URL is effectively permanent
+            });
+            publicAudioUrl = publicAudioUrl[0]; // getSignedUrl returns an array
+
+            console.log(`Firebase Storage Public URL: ${publicAudioUrl}`);
+
+            // 3. Clean up local temporary file after successful upload
+            if (fs.existsSync(localOutputFilePath)) {
+                fs.unlinkSync(localOutputFilePath);
+                console.log(`Cleaned up temporary local file: ${localOutputFilePath}`);
+            }
+
+        } catch (uploadError) {
+            console.error(`Error uploading to Firebase Storage or getting public URL for ${url}: ${uploadError.message}`);
+            // Attempt to clean up local file even if Firebase upload fails
+            if (fs.existsSync(localOutputFilePath)) {
+                fs.unlinkSync(localOutputFilePath);
+                console.log(`Cleaned up local file after Firebase upload error: ${localOutputFilePath}`);
+            }
+            return res.status(500).json({ success: false, message: `Failed to upload audio to cloud storage: ${uploadError.message}` });
+        }
+
+        // After successful download and Firebase Storage upload, extract metadata
+        exec(`yt-dlp --print-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${url}"`, { maxBuffer: 1024 * 1024 * 5 }, (metaError, metaStdout, metaStderr) => {
             if (metaError) {
-                console.error(`exec error for metadata after download: ${metaError.message}`);
+                console.error(`exec error for metadata after download and upload: ${metaError.message}`);
                 return res.json({
-                    success: true, // Still success as the file is downloaded
-                    message: 'Audio downloaded and converted successfully, but metadata extraction failed.',
+                    success: true, // Still success as the file is downloaded and uploaded to storage
+                    message: 'Audio downloaded, uploaded, but metadata extraction failed.',
                     audioUrl: publicAudioUrl,
                     title: 'Downloaded Track (Metadata N/A)',
                     artist: 'Unknown',
@@ -287,15 +314,15 @@ app.post('/download-mp3', async (req, res) => {
                 const metadata = JSON.parse(metaStdout);
                 res.json({
                     success: true,
-                    message: 'Audio downloaded and converted successfully!',
+                    message: 'Audio downloaded, converted, and uploaded to Firebase Storage!',
                     audioUrl: publicAudioUrl,
                     title: metadata.title,
                     artist: metadata.uploader || metadata.channel || 'Unknown',
                     thumbnail: metadata.thumbnails ? metadata.thumbnails[metadata.thumbnails.length - 1]?.url : null
                 });
             } catch (parseMetaError) {
-                console.error(`Failed to parse metadata JSON after download: ${parseMetaError.message}`);
-                res.status(500).json({ success: false, message: 'Failed to parse metadata after download.' });
+                console.error(`Failed to parse metadata JSON after download and upload: ${parseMetaError.message}`);
+                res.status(500).json({ success: false, message: 'Failed to parse metadata after download and upload.' });
             }
         });
     });
@@ -304,6 +331,5 @@ app.post('/download-mp3', async (req, res) => {
 // Start the server
 app.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
-    console.log(`Audio files will be stored in: ${audioDir}`);
+    console.log(`Temporary audio files will be stored in: ${audioDir}`);
 });
-
