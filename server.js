@@ -9,7 +9,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // Middleware
-app.use(cors()); // Enable CORS for all routes
+app.use(cors({
+    origin: ['https://96mayar96.github.io', 'http://localhost:3000', 'http://localhost:3001'],
+    credentials: true
+})); // Enable CORS for specific origins
 app.use(express.json()); // Parse JSON request bodies
 
 // Directory to store audio files
@@ -39,10 +42,10 @@ app.get('/search', async (req, res) => {
     }
 
     console.log(`Received search request for: "${query}" (SoundCloud search via yt-dlp)`);
-    console.log(`Using command: ${command}`);
 
     // Use scsearch: prefix method which is specifically designed for SoundCloud searches in yt-dlp
     const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch:${query}"`;
+    console.log(`Using command: ${command}`);
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
         if (error) {
