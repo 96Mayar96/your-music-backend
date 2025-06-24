@@ -86,8 +86,8 @@ app.get('/search', async (req, res) => {
     }
 
     console.log(`Searching SoundCloud for: ${query}`);
-    // Use 'scsearch30:' to limit results to SoundCloud and fetch up to 30 results
-    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch30:${query}"`;
+    // Remove --flat-playlist to get full metadata (including album info)
+    const command = `yt-dlp --dump-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch30:${query}"`;
     console.log(`Using command: ${command}`);
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
@@ -124,9 +124,10 @@ app.get('/search', async (req, res) => {
                     return {
                         id: data.id,
                         title: data.title,
-                        url: data.url,
+                        url: data.webpage_url || data.url,
                         artist: data.artist || data.uploader || data.channel || 'Unknown',
-                        thumbnail: data.thumbnail || `https://placehold.co/60x60/333/FFF?text=🎧`
+                        album: data.album || data.playlist || '',
+                        thumbnail: (data.thumbnail && data.thumbnail.trim()) ? data.thumbnail : (data.thumbnails && data.thumbnails.length > 0 ? data.thumbnails[data.thumbnails.length - 1].url : 'https://placehold.co/60x60/333/FFF?text=🎧')
                     };
                 } catch (parseError) {
                     console.warn('Could not parse JSON line from yt-dlp output:', line, parseError);
