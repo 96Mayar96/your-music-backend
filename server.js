@@ -5,7 +5,7 @@ const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto'); // For hashing URLs
-const NodeCache = require('node-cache'); // Import node-cache
+const Redis = require('ioredis');
 
 // Firebase Admin SDK Imports
 const admin = require('firebase-admin');
@@ -37,8 +37,13 @@ try {
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Initialize NodeCache for search results with a TTL of 1 hour (3600 seconds)
-const searchCache = new NodeCache({ stdTTL: 3600 });
+// Initialize Redis Cloud connection
+const redis = new Redis({
+  host: 'redis-18426.c328.europe-west3-1.gce.redns.redis-cloud.com',
+  port: 18426,
+  password: 'QOW3nICCleevROcEWNnNqgR7V818GHJj',
+  tls: {} // Required for Redis Cloud SSL
+});
 
 // Middleware
 app.use(cors({
@@ -77,12 +82,16 @@ app.get('/search', async (req, res) => {
         return res.status(400).json({ success: false, message: 'Search query is required.' });
     }
 
-    const cacheKey = `search_${query}`;
-    const cachedResults = searchCache.get(cacheKey);
-
-    if (cachedResults) {
-        console.log(`Serving search results for "${query}" from cache.`);
-        return res.json({ success: true, results: cachedResults });
+    // Try Redis cache first
+    try {
+        const cachedResults = await redis.get(`search:${query}`);
+        if (cachedResults) {
+            console.log(`Serving search results for "${query}" from Redis cache.`);
+            return res.json({ success: true, results: JSON.parse(cachedResults) });
+        }
+    } catch (err) {
+        console.error('Redis error:', err);
+        // Continue to fallback to yt-dlp if Redis fails
     }
 
     console.log(`Searching SoundCloud for: ${query}`);
@@ -135,7 +144,13 @@ app.get('/search', async (req, res) => {
                 }
             }).filter(item => item !== null);
 
-            searchCache.set(cacheKey, results);
+            // Save to Redis cache
+            try {
+                redis.set(`search:${query}`, JSON.stringify(results));
+            } catch (err) {
+                console.error('Redis set error:', err);
+            }
+
             res.json({ success: true, results });
 
         } catch (parseError) {
