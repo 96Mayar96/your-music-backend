@@ -23,7 +23,7 @@ try {
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         // !! IMPORTANT !! This has been updated with your provided bucket URL
-        storageBucket: "yourmusicplayerapp.firebasestorage.app" 
+        storageBucket: "yourmusicplayerapp.appspot.com" 
     });
     console.log("Firebase Admin SDK initialized successfully.");
     firebaseAdminInitialized = true;
@@ -86,8 +86,8 @@ app.get('/search', async (req, res) => {
     }
 
     console.log(`Searching SoundCloud for: ${query}`);
-    // Use 'scsearch10:' to limit results to SoundCloud and fetch up to 10 results
-    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch10:${query}"`;
+    // Use 'scsearch30:' to limit results to SoundCloud and fetch up to 30 results
+    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch30:${query}"`;
     console.log(`Using command: ${command}`);
 
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
