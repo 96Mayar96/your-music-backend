@@ -23,7 +23,7 @@ try {
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         // !! IMPORTANT !! This has been updated with your provided bucket URL
-        storageBucket: "yourmusicplayerapp.appspot.com" 
+        storageBucket: "yourmusicplayerapp.firebasestorage.app" 
     });
     console.log("Firebase Admin SDK initialized successfully.");
     firebaseAdminInitialized = true;
