@@ -1,14 +1,19 @@
 // server.js
-const express = require('express');
-const cors = require('cors');
-const { exec } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto'); // For hashing URLs
+import express from 'express';
+import cors from 'cors';
+import { exec } from 'child_process';
+import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto'; // For hashing URLs
 import { createClient } from 'redis';
 
+// ESM workaround for __dirname and __filename
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // Firebase Admin SDK Imports
-const admin = require('firebase-admin');
+import admin from 'firebase-admin';
 
 // Initialize Firebase Admin SDK
 // IMPORTANT: Replace process.env.FIREBASE_ADMIN_SDK_CONFIG with your actual JSON config
