@@ -5,7 +5,7 @@ const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto'); // For hashing URLs
-const Redis = require('ioredis');
+import { createClient } from 'redis';
 
 // Firebase Admin SDK Imports
 const admin = require('firebase-admin');
@@ -37,13 +37,19 @@ try {
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Initialize Redis Cloud connection
-const redis = new Redis({
-  host: 'redis-18426.c328.europe-west3-1.gce.redns.redis-cloud.com',
-  port: 18426,
+// Initialize Redis Cloud connection using redis v4+ client with TLS
+const redisClient = createClient({
+  username: 'default',
   password: 'QOW3nICCleevROcEWNnNqgR7V818GHJj',
-  tls: {} // Required for Redis Cloud SSL
+  socket: {
+    host: 'redis-18426.c328.europe-west3-1.gce.redns.redis-cloud.com',
+    port: 18426,
+    tls: true
+  }
 });
+
+redisClient.on('error', err => console.log('Redis Client Error', err));
+redisClient.connect();
 
 // Middleware
 app.use(cors({
@@ -84,7 +90,7 @@ app.get('/search', async (req, res) => {
 
     // Try Redis cache first
     try {
-        const cachedResults = await redis.get(`search:${query}`);
+        const cachedResults = await redisClient.get(`search:${query}`);
         if (cachedResults) {
             console.log(`Serving search results for "${query}" from Redis cache.`);
             return res.json({ success: true, results: JSON.parse(cachedResults) });
@@ -146,7 +152,7 @@ app.get('/search', async (req, res) => {
 
             // Save to Redis cache
             try {
-                redis.set(`search:${query}`, JSON.stringify(results));
+                redisClient.set(`search:${query}`, JSON.stringify(results));
             } catch (err) {
                 console.error('Redis set error:', err);
             }
