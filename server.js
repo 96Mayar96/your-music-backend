@@ -15,6 +15,9 @@ const __dirname = path.dirname(__filename);
 // Firebase Admin SDK Imports
 import admin from 'firebase-admin';
 
+// Redis imports
+import { createRedisClientWithFallback } from './redis-config.js';
+
 // Initialize Firebase Admin SDK
 // IMPORTANT: Replace process.env.FIREBASE_ADMIN_SDK_CONFIG with your actual JSON config
 // Best practice: Store this JSON content in an environment variable on your hosting platform (e.g., Render)
@@ -43,18 +46,41 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // Initialize Redis Cloud connection using redis v4+ client with TLS
-const redisClient = createClient({
-    username: 'default',
-    password: 'QOW3nICCleevROcEWNnNqgR7V818GHJj',
-    socket: {
-        host: 'redis-18426.c328.europe-west3-1.gce.redns.redis-cloud.com',
-        port: 18426,
-        tls: true
-    }
-});
+let redisClient;
+let redisConnected = false;
 
-redisClient.on('error', err => console.log('Redis Client Error', err));
-await redisClient.connect();
+// Async function to initialize Redis
+async function initializeRedis() {
+    try {
+        redisClient = await createRedisClientWithFallback();
+        if (redisClient) {
+            console.log('Successfully connected to Redis Cloud');
+            redisConnected = true;
+        } else {
+            console.log('Continuing without Redis cache - search results will not be cached');
+            redisConnected = false;
+            // Create a dummy client to prevent errors
+            redisClient = {
+                isReady: false,
+                get: async () => null,
+                set: async () => null
+            };
+        }
+    } catch (error) {
+        console.error('Failed to initialize Redis:', error.message);
+        console.log('Continuing without Redis cache - search results will not be cached');
+        redisConnected = false;
+        // Create a dummy client to prevent errors
+        redisClient = {
+            isReady: false,
+            get: async () => null,
+            set: async () => null
+        };
+    }
+}
+
+// Initialize Redis immediately
+initializeRedis();
 
 // Middleware
 app.use(cors({
@@ -81,6 +107,15 @@ app.get('/', (req, res) => {
     res.send('Music Player Backend is running! Temporary audio directory created if needed.');
 });
 
+// Redis status endpoint for debugging
+app.get('/redis-status', (req, res) => {
+    res.json({
+        redisConnected: redisConnected,
+        redisReady: redisClient?.isReady || false,
+        message: redisConnected ? 'Redis is connected and ready' : 'Redis is not connected'
+    });
+});
+
 /**
  * /search endpoint
  * Performs a SoundCloud search by name using yt-dlp.
@@ -95,10 +130,12 @@ app.get('/search', async (req, res) => {
 
     // Try Redis cache first
     try {
-        const cachedResults = await redisClient.get(`search:${query}`);
-        if (cachedResults) {
-            console.log(`Serving search results for "${query}" from Redis cache.`);
-            return res.json({ success: true, results: JSON.parse(cachedResults) });
+        if (redisConnected && redisClient.isReady) {
+            const cachedResults = await redisClient.get(`search:${query}`);
+            if (cachedResults) {
+                console.log(`Serving search results for "${query}" from Redis cache.`);
+                return res.json({ success: true, results: JSON.parse(cachedResults) });
+            }
         }
     } catch (err) {
         console.error('Redis error:', err);
@@ -157,7 +194,11 @@ app.get('/search', async (req, res) => {
 
             // Save to Redis cache
             try {
-                redisClient.set(`search:${query}`, JSON.stringify(results));
+                if (redisConnected && redisClient.isReady) {
+                    redisClient.set(`search:${query}`, JSON.stringify(results))
+                        .then(() => console.log(`Cached search results for "${query}" in Redis`))
+                        .catch(err => console.error('Redis set error:', err));
+                }
             } catch (err) {
                 console.error('Redis set error:', err);
             }
