@@ -15,8 +15,8 @@ const __dirname = path.dirname(__filename);
 // Firebase Admin SDK Imports
 import admin from 'firebase-admin';
 
-// Redis imports
-import { createRedisClientWithFallback } from './redis-config.js';
+const app = express();
+const PORT = process.env.PORT || 10000;
 
 // Initialize Firebase Admin SDK
 // IMPORTANT: Replace process.env.FIREBASE_ADMIN_SDK_CONFIG with your actual JSON config
@@ -41,46 +41,6 @@ try {
     // Optionally, you might want to stop the server if Firebase initialization is critical
     // process.exit(1); 
 }
-
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-// Initialize Redis Cloud connection using redis v4+ client with TLS
-let redisClient;
-let redisConnected = false;
-
-// Async function to initialize Redis
-async function initializeRedis() {
-    try {
-        redisClient = await createRedisClientWithFallback();
-        if (redisClient) {
-            console.log('Successfully connected to Redis Cloud');
-            redisConnected = true;
-        } else {
-            console.log('Continuing without Redis cache - search results will not be cached');
-            redisConnected = false;
-            // Create a dummy client to prevent errors
-            redisClient = {
-                isReady: false,
-                get: async () => null,
-                set: async () => null
-            };
-        }
-    } catch (error) {
-        console.error('Failed to initialize Redis:', error.message);
-        console.log('Continuing without Redis cache - search results will not be cached');
-        redisConnected = false;
-        // Create a dummy client to prevent errors
-        redisClient = {
-            isReady: false,
-            get: async () => null,
-            set: async () => null
-        };
-    }
-}
-
-// Initialize Redis immediately
-initializeRedis();
 
 // Middleware
 app.use(cors({
@@ -107,52 +67,53 @@ app.get('/', (req, res) => {
     res.send('Music Player Backend is running! Temporary audio directory created if needed.');
 });
 
-// Redis status endpoint for debugging
-app.get('/redis-status', (req, res) => {
-    res.json({
-        redisConnected: redisConnected,
-        redisReady: redisClient?.isReady || false,
-        message: redisConnected ? 'Redis is connected and ready' : 'Redis is not connected'
-    });
+const client = createClient({
+    username: 'default',
+    password: 'QOW3nICCleevROcEWNnNqgR7V818GHJj',
+    socket: {
+        host: 'redis-18426.c328.europe-west3-1.gce.redns.redis-cloud.com',
+        port: 18426,
+        tls: false // Explicitly disable TLS since your instance doesn't require it
+    }
 });
+
+client.on('error', err => console.log('Redis Client Error', err));
+
+(async () => {
+    try {
+        await client.connect();
+        console.log('Connected to Redis successfully!');
+        
+        // Test the connection
+        await client.set('foo', 'bar');
+        const result = await client.get('foo');
+        console.log('Test result:', result); // Should output: bar
+        
+    } catch (error) {
+        console.error('Connection failed:', error);
+    }
+})();
 
 /**
  * /search endpoint
  * Performs a SoundCloud search by name using yt-dlp.
  * Expects a query parameter 'q'.
- * Caches results for better performance.
+ * (NO Caching, Redis removed)
  */
 app.get('/search', async (req, res) => {
     const query = req.query.q;
     if (!query) {
         return res.status(400).json({ success: false, message: 'Search query is required.' });
     }
-
-    // Try Redis cache first
-    try {
-        if (redisConnected && redisClient.isReady) {
-            const cachedResults = await redisClient.get(`search:${query}`);
-            if (cachedResults) {
-                console.log(`Serving search results for "${query}" from Redis cache.`);
-                return res.json({ success: true, results: JSON.parse(cachedResults) });
-            }
-        }
-    } catch (err) {
-        console.error('Redis error:', err);
-        // Continue to fallback to yt-dlp if Redis fails
-    }
-
     console.log(`Searching SoundCloud for: ${query}`);
     // Remove --flat-playlist to get full metadata (including album info)
     const command = `yt-dlp --dump-json --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "scsearch30:${query}"`;
     console.log(`Using command: ${command}`);
-
     exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
         if (error) {
             console.error(`exec error for /search: ${error.message}`);
             console.error(`stderr for /search: ${stderr}`);
             let errorMessage = `Failed to perform search: ${error.message}`;
-
             if (stderr.includes('No entries found')) {
                 errorMessage = 'No songs found on SoundCloud for this query. Try a different name.';
             } else if (stderr.includes('Sign in to confirm you\'re not a bot') || stderr.includes('Please log in')) {
@@ -166,13 +127,11 @@ app.get('/search', async (req, res) => {
             } else if (stderr.includes('RateLimitExceeded')) {
                 errorMessage = 'SoundCloud rate limit exceeded. Please try again later.';
             }
-
             return res.status(500).json({ success: false, message: errorMessage, stderr: stderr });
         }
         if (stderr) {
             console.warn(`stderr for /search (non-error output): ${stderr}`);
         }
-
         try {
             const lines = stdout.split('\n').filter(line => line.trim() !== '');
             const results = lines.map(line => {
@@ -191,20 +150,7 @@ app.get('/search', async (req, res) => {
                     return null;
                 }
             }).filter(item => item !== null);
-
-            // Save to Redis cache
-            try {
-                if (redisConnected && redisClient.isReady) {
-                    redisClient.set(`search:${query}`, JSON.stringify(results))
-                        .then(() => console.log(`Cached search results for "${query}" in Redis`))
-                        .catch(err => console.error('Redis set error:', err));
-                }
-            } catch (err) {
-                console.error('Redis set error:', err);
-            }
-
             res.json({ success: true, results });
-
         } catch (parseError) {
             console.error(`Failed to parse yt-dlp search JSON or process results: ${parseError.message}`);
             res.status(500).json({ success: false, message: `Failed to process search results: ${parseError.message}` });
