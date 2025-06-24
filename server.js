@@ -44,17 +44,17 @@ const PORT = process.env.PORT || 10000;
 
 // Initialize Redis Cloud connection using redis v4+ client with TLS
 const redisClient = createClient({
-  username: 'default',
-  password: 'QOW3nICCleevROcEWNnNqgR7V818GHJj',
-  socket: {
-    host: 'redis-18426.c328.europe-west3-1.gce.redns.redis-cloud.com',
-    port: 18426,
-    tls: true
-  }
+    username: 'default',
+    password: 'QOW3nICCleevROcEWNnNqgR7V818GHJj',
+    socket: {
+        host: 'redis-18426.c328.europe-west3-1.gce.redns.redis-cloud.com',
+        port: 18426,
+        tls: true
+    }
 });
 
 redisClient.on('error', err => console.log('Redis Client Error', err));
-redisClient.connect();
+await redisClient.connect();
 
 // Middleware
 app.use(cors({
