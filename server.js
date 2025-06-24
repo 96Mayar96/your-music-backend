@@ -329,6 +329,45 @@ app.post('/download-mp3', async (req, res) => {
     });
 });
 
+/**
+ * /album-tracks endpoint
+ * Expects a JSON body with { url } (the album/playlist URL)
+ * Uses yt-dlp to fetch all tracks in the album/playlist and returns them as an array
+ */
+app.post('/album-tracks', async (req, res) => {
+    const { url } = req.body;
+    if (!url || typeof url !== 'string' || !url.includes('/sets/')) {
+        return res.status(400).json({ success: false, message: 'A valid SoundCloud album/playlist URL is required.' });
+    }
+    const command = `yt-dlp --dump-json --flat-playlist --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --no-check-certificate --socket-timeout 60 "${url}"`;
+    exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
+        if (error) {
+            return res.status(500).json({ success: false, message: `Failed to fetch album tracks: ${error.message}` });
+        }
+        try {
+            const lines = stdout.split('\n').filter(line => line.trim() !== '');
+            const tracks = lines.map(line => {
+                try {
+                    const data = JSON.parse(line);
+                    return {
+                        id: data.id,
+                        title: data.title,
+                        url: data.url || data.webpage_url,
+                        artist: data.artist || data.uploader || data.channel || 'Unknown',
+                        album: data.album || '',
+                        thumbnail: (data.thumbnail && data.thumbnail.trim()) ? data.thumbnail : (data.thumbnails && data.thumbnails.length > 0 ? data.thumbnails[data.thumbnails.length - 1].url : 'https://placehold.co/60x60/333/FFF?text=🎧')
+                    };
+                } catch {
+                    return null;
+                }
+            }).filter(Boolean);
+            res.json({ success: true, tracks });
+        } catch (parseError) {
+            res.status(500).json({ success: false, message: `Failed to parse album tracks: ${parseError.message}` });
+        }
+    });
+});
+
 // Start the server
 app.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
